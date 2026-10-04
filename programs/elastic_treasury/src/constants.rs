@@ -176,8 +176,20 @@ pub const DEFAULT_ORACLE_MAX_CONF_BPS: u32 = 100; // 1%
 
 /// Raydium CPMM. Verified live on mainnet as an executable program owned by
 /// `BPFLoaderUpgradeab1e...`.
-#[constant]
-pub const RAYDIUM_CPMM_PROGRAM_ID: &[u8] = b"CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
+///
+/// The base58 text is 44 characters but a Solana address is 32 **bytes**, so
+/// this must be the decoded form. Storing `b"CPMMoo8..."` would hand the venue
+/// adapter a 44-byte "pubkey" and every `Program<>` CPI would fail at CPI
+/// validation, far from the cause.
+pub const RAYDIUM_CPMM_PROGRAM_ID: Pubkey =
+    Pubkey::new_from_array([
+        169, 42, 90, 139, 79, 41, 89, 82, 132, 37, 80, 170, 147, 253, 91, 149, 181, 172,
+        230, 168, 235, 146, 12, 147, 148, 46, 67, 105, 12, 32, 236, 115,
+    ]);
+
+/// The same address as base58, for logs, error messages and docs. Compiled as a
+/// `const_assert_eq` below so the two can never drift.
+pub const RAYDIUM_CPMM_PROGRAM_ID_BASE58: &str = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
 
 /// `AUTH_SEED` in `raydium-cp-swap/programs/cp-swap/src/lib.rs:82`. The CPMM
 /// authority that signs vault transfers.
@@ -331,6 +343,19 @@ mod tests {
 
     // PLAN.md T1: "a test confirms a known Monday 00:01 UTC timestamp passes the
     // check and a Sunday one fails."
+
+    /// The decoded CPMM program id must re-encode to the base58 string it was
+    /// transcribed from. A hand-typed byte array is exactly the kind of thing
+    /// that is wrong and looks right, so this asserts the round trip.
+    #[test]
+    fn raydium_program_id_round_trips_through_base58() {
+        assert_eq!(
+            RAYDIUM_CPMM_PROGRAM_ID.to_string(),
+            RAYDIUM_CPMM_PROGRAM_ID_BASE58
+        );
+        // 32 bytes, not the 44 characters of its base58 form.
+        assert_eq!(RAYDIUM_CPMM_PROGRAM_ID.to_bytes().len(), 32);
+    }
 
     /// 1970-01-05 00:01:00 UTC. Unix time 0 was a Thursday (index 4 with Sunday
     /// = 0), so +4 days lands on Monday and +1 minute makes it 00:01.

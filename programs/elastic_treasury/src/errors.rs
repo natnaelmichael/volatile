@@ -14,7 +14,7 @@ use anchor_lang::prelude::*;
 /// positionally from 6000, so adding a variant anywhere but the end renumbers
 /// everything after it. `tests/idl_is_stable.rs` fails if this drifts from the
 /// generated IDL.
-pub const NUM_ERRORS: u8 = 59;
+pub const NUM_ERRORS: u8 = 61;
 
 #[error_code]
 pub enum ElasticTreasuryError {
@@ -151,6 +151,14 @@ pub enum ElasticTreasuryError {
     // -- harvest (60) ------------------------------------------------------
     /// There is nothing withheld to harvest.
     NothingToHarvest,
+
+    // -- appended after the 59-error freeze (60) ---------------------------
+    /// The CPMM swap would have delivered less net than `min_out` requires.
+    /// PLAN.md §6.1 / I7: never accept less than the keeper asked for.
+    SlippageExceeded,
+    /// The pool delivered more than we quoted, so the reserves the quote was
+    /// priced against were stale and the quote is not the one that settled.
+    StalePoolState,
 }
 
 impl From<MathError> for ElasticTreasuryError {
@@ -166,6 +174,12 @@ impl From<MathError> for ElasticTreasuryError {
             MathError::Unrepresentable | MathError::LossyConversion => {
                 ElasticTreasuryError::PrecisionLoss
             }
+            // A statistic asked for more observations than exist.
+            MathError::InsufficientSamples => ElasticTreasuryError::InsufficientSamples,
+            // Venue-side invariant failures. These are the anti-sandwich checks,
+            // so they get their own errors rather than hiding in MathOverflow.
+            MathError::MinOutViolated => ElasticTreasuryError::SlippageExceeded,
+            MathError::StaleQuote => ElasticTreasuryError::StalePoolState,
         }
     }
 }
@@ -193,4 +207,13 @@ pub enum MathError {
     NegativeSqrt,
     /// A conversion to the target width would truncate a non-zero remainder.
     LossyConversion,
+    /// Fewer observations than the statistic is defined over. A volatility
+    /// window needs two, a TWAP needs two, and a single price would otherwise
+    /// report a perfect 0% range.
+    InsufficientSamples,
+    /// A CPMM swap would have delivered less than the required `min_out`.
+    MinOutViolated,
+    /// The pool reported more output than we quoted, which means the reserves
+    /// we priced against were stale and the quote is not the one that settled.
+    StaleQuote,
 }

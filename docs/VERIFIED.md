@@ -145,16 +145,22 @@ require_gte!(amount_received, minimum_amount_out, ErrorCode::ExceededSlippage);
 ```
 
 `minimum_amount_out` is compared against the **net** amount the destination account receives, i.e.
-**after** the Token-2022 fee is withheld. So the correct derivation is:
+**after** the Token-2022 fee is withheld. So the number we pass must be the **net** figure we want
+to receive:
 
 ```
-min_out_net  = floor(dY_net * (10_000 - MAX_SLIPPAGE_BPS) / 10_000)
-min_out_gross = TransferFeeConfig::calculate_pre_fee_amount(min_out_net)   // inverse of the fee
+min_out = floor(dY_net * (10_000 - MAX_SLIPPAGE_BPS) / 10_000)     // net, whole raw units
 ```
 
-and pass `min_out_gross` as `minimum_amount_out`. Passing a net number directly would be *too
-strict*; passing a gross number would be *too loose*. Both failure directions matter, so this is
-encoded once in `math::amm` and unit-tested.
+and pass `min_out` as `minimum_amount_out`. There is deliberately **no gross-up with
+`calculate_pre_fee_amount`** here: that helper inverts the *input* leg, and grossing up a value the
+pool then compares net would make the check strictly tighter than the plan asks for — a correctly
+priced swap could revert. The Token-2022 fee on the output leg is already inside the pool's own
+`amount_out` arithmetic, so it needs no correction on our side.
+
+The gross-up that *is* required is the inbound one, below. Both directions are encoded once in
+`math::amm::min_out_from_net` and `math::amm::assert_min_out_satisfied` and unit-tested, including
+the negative case that delivers less than `min_out` after the CPI.
 
 Inbound direction (line 88): `actual_amount_in = amount_in - transfer_fee`. **The pool curve is fed
 `amount_in` net of the Token-2022 fee**, so sizing must gross up the quote spent before the CPI.
@@ -402,13 +408,78 @@ V4's allow-list forbids `TransferHook` on our mint entirely. PLAN.md §5's relia
 
 ---
 
+## T2 notes: reading the CPMM sources and the plan's own reference table
+
+Recorded while transcribing `math/`, because two items are judgement calls a later reader would
+otherwise have to reverse-engineer.
+
+### The plan's §6.2 reference table cannot be checked "within 1 bps"
+
+T2's acceptance criterion says the §6.2 reference values must "reproduce within 1 bps", but the plan
+states them to one decimal place of a percent — a granularity of 10 bps. The literal criterion is
+therefore unsatisfiable against the printed numbers. Both forms are asserted in
+`math::fee_deterrent::tests::reference_values_match_the_plan_table`:
+
+| `R = P0/Pf` | plan | exact, this build |
+|---|---|---|
+| 1.00 | 21.4% | **21.39%** (2 139 bps) |
+| 1.10 | 18.6% | **18.65%** (1 865 bps) |
+| 1.25 | 14.9% | **14.87%** (1 487 bps) |
+| 1.50 | 9.3% | **9.29%** (929 bps) |
+| ≥ 2.00 | 0% | **0%** |
+
+Each exact value agrees with the plan's rounded figure to within half of the plan's own 10-bps
+rounding step. `R = 1.10` is the only entry where the exact value rounds *up* out of the printed
+step (18.65% → 18.6%), which is the direction the plan's "round the required fee up" rule requires.
+
+### The uncapped required fee exceeds the 50% cap for crashes worse than ~69%
+
+Solving `fee_required = 1 - sqrt(u*)` for the price move at which it reaches the 50% program cap
+gives `R ≈ 0.3125`, i.e. a **68.75%** price drop. Below that the equation asks for a fee the program
+is not permitted to charge. `required_fee_bps_raw` therefore returns the *uncapped* value (and
+`None` for `R >= 2`), while `required_fee_bps` / `fee_for_move` — the on-chain path — always return
+at most `MAX_FEE_BPS`. Keeping both means "the cap bound" stays distinguishable from "the equation
+is satisfied", which the tests rely on. This is the sharpest instance of the §6.2 limitation already
+on record: past a 69% crash v1 deters nothing at all.
+
+### CPMM elasticity (§6.4) is a constant, not a function of the reserves
+
+`elasticity` is defined as "bps price move per 1% of quote reserve traded". For a constant-product
+curve that quantity does not depend on the reserve ratio at all. With `dy = dx*y/(x+dx)` and token
+price `x/y`:
+
+```text
+price' = x'/y' = (x+dx)/x * (x+dx)/x   =>   relative move = (1+f)^2 - 1 = 2f + f^2,  f = dx/x
+```
+
+At `f = 1%` that is `2 + 0.01 = 2.01%` = **201 bps for every CPMM pool**, and selling instead of
+buying gives the same magnitude with the opposite sign. Consequences worth recording:
+
+* `math::amm::ELASTICITY_BPS_PER_ONE_PERCENT` is a constant. There is no reserve input to get wrong
+  and no way for a pool operator to make the program's elasticity look better by choosing a ratio.
+* It must still be *derived and asserted* rather than assumed, so
+  `elasticity_is_reserve_independent` simulates swaps at five reserve ratios (1:1, 100:1, 1:100,
+  arbitrary, and a size large enough to avoid truncation) and checks the realised move against the
+  closed form. The realised integer move is 200–201 bps: the pool floors `dy`, which can only lose,
+  so the closed form is an upper bound.
+
+### TWAP is a difference of cumulative values, not a sum over intervals
+
+The CPMM observation ring stores cumulative price×time. The average over `[t0, t1]` is
+`(cum(t1) - cum(t0)) / (t1 - t0)`, using the cumulative values bracketing the window. Because those
+values are absolute rather than per-slot, a ring wrap needs no correction — the caller only has to
+linearise the ring into timestamp order (T8). `math::volatility::twap` returns the average in the
+*input's* price units (Q32.32) so it does not have to know which Q-format it was handed.
+
+---
+
 ## Summary of plan amendments carried forward
 
 | # | Amendment | Where it lands |
 |---|---|---|
 | A1 | Fee *decreases* are also delayed 2 epochs (V1). | `docs/DESIGN.md`, README; `revert_action` has no faster path |
 | A2 | A queued `SetTransferFee` is silently overwritten by the next call (V2). | `FeeQueueStatus` in `state/schedule.rs`, idempotent `queue_scheduled_fee` |
-| A3 | `minimum_amount_out` is compared **net** of the output transfer fee (V4). | `math::amm::min_amount_out` + unit tests |
+| A3 | `minimum_amount_out` is compared **net** of the output transfer fee, so pass the desired **net** receipt with **no** gross-up (V4, re-confirmed against `instructions_swap_base_input.rs:147-153` in T2). | `math::amm::min_out_from_net` + `assert_min_out_satisfied` + unit tests |
 | A4 | `SwapBaseInput` feeds the curve `amount_in` **net** of the input transfer fee (V4). | `math::amm` sizing, `venue/raydium_cpmm.rs` |
 | A5 | CPMM reserves are net of accrued protocol/fund/creator fees (V4). | `venue/raydium_cpmm.rs` reserve read |
 | A6 | Observation buffer is a ring of **cumulative Q32.32 × seconds** and only advances every ≥15 s (V4). | `math::volatility`, invariant I10 |

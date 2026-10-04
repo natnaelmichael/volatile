@@ -23,7 +23,7 @@ contradict or complete the plan text. They are listed so the reasoning stays vis
 |---|---|---|---|
 | A1 | Do fee *decreases* also wait two epochs? (PLAN §5.4: "unless V1 shows decreases are immediate") | **Yes they do.** No faster revert path exists. | V1 |
 | A2 | Does a queued fee change survive a second `SetTransferFee`? | **No, it is silently overwritten.** Need `FeeQueueStatus` + idempotent `queue_scheduled_fee`. | V2 |
-| A3 | Is CPMM's `minimum_amount_out` net or gross of the Token-2022 fee? | **Net.** Derive with `calculate_pre_fee_amount`. | V4 |
+| A3 | Is CPMM's `minimum_amount_out` net or gross of the Token-2022 fee? | **Net, and pass it as-is.** No `calculate_pre_fee_amount` gross-up: the pool compares `amount_received` (already net) against the threshold, so grossing up would be stricter than the plan. The gross-up applies to the *inbound* leg only. | V4 |
 | A4 | Is the CPMM curve fed the input amount gross or net of the Token-2022 fee? | **Net.** Gross up before the CPI. | V4 |
 | A5 | Do CPMM vault balances need adjustment before computing price? | **Yes** — accrued protocol + fund + creator fees are excluded from the curve. | V4 |
 | A6 | Is the CPMM observation account a price series or cumulative prices? | **Cumulative Q32.32 × seconds in a 100-slot ring, advancing only every ≥15 s.** No TWAP may exist at all. | V4 |
