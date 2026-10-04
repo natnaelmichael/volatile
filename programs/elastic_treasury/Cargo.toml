@@ -1,0 +1,45 @@
+[package]
+name = "elastic_treasury"
+version = "0.1.0"
+description = "Weekly-published volatility-controlled transfer fee on a Token-2022 mint"
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "elastic_treasury"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+anchor-lang = { workspace = true }
+# token_interface / token_2022_extensions supply transfer_fee_set,
+# harvest_withheld_tokens_to_mint and withdraw_withheld_tokens_from_mint.
+# Verified in docs/VERIFIED.md V6.
+anchor-spl = { workspace = true }
+# `StateWithExtensions` / `Pod` for reading TransferFeeConfig off a raw mint
+# AccountInfo without a CPI. Verified in docs/VERIFIED.md V3.
+spl-token-2022-interface = { workspace = true }
+# The Pyth price account is read field-by-field rather than through
+# `pyth-sdk-solana`, which cannot compile against anchor-lang 1.1.2's Solana
+# cohort at all (borsh 0.10 vs 1.x). See docs/VERIFIED.md A11 and oracle/pyth.rs.
+bytemuck = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+litesvm = "0.10.0"
+solana-message = "3.0.1"
+solana-transaction = "3.0.2"
+solana-signer = "3.0.0"
+solana-keypair = "3.0.1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

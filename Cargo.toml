@@ -1,0 +1,31 @@
+[workspace]
+members = ["programs/elastic_treasury"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.89.0"
+
+# PLAN.md §0.2: pin every version. Caret ranges silently let Anchor 1.1 -> 1.2 and
+# spl-token-2022 11 -> 12 through under the same CLI, which is how CPI helpers
+# disappear without any visible change in the diff.
+[workspace.dependencies]
+anchor-lang = "=1.1.2"
+anchor-spl = "=1.1.2"
+spl-token-2022-interface = "=2.0.0"
+bytemuck = { version = "=1.24.0", features = ["derive"] }
+
+# Dev-only.
+proptest = "=1.9.0"
+
+# PLAN.md §0.4: overflow checks must be ON in release. A Solana program that
+# wraps silently on a fee calculation is a protocol drain.
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+
+[profile.release.build-override]
+opt-level = 3
+incremental = false
+codegen-units = 1

@@ -1,0 +1,22 @@
+[toolchain]
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+elastic_treasury = "8UEBfsW4pD4VoGcyRiA2qnkuyh1s3DpwfzCphacXef6w"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+# PLAN.md §8: "LiteSVM/Bankrun with clock and epoch warping" first, then the
+# real validator. The `-p` flag is what makes `cargo test` run the program's own
+# unit tests; without it Anchor picks a target that does not exist.
+[scripts]
+test = "cargo test -p elastic_treasury"
+test-build = "anchor build"
+lint = "cargo clippy -p elastic_treasury --all-targets -- -D warnings"
+
+[hooks]

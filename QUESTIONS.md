@@ -31,6 +31,7 @@ contradict or complete the plan text. They are listed so the reasoning stays vis
 | A8 | How is Pyth `max_age` expressed? | **Slots, not seconds.** `max_age_slots` configurable; SDK's `VALID_SLOT_PERIOD = 25` is devnet-sized. | V7 |
 | A9 | Does the Pyth SDK validate confidence? | **No**, and `price` is `i64`. Check `conf` and positivity ourselves. | V7 |
 | A10 | Which extensions may our mint carry? | **Only `TransferFeeConfig`** (optionally `MetadataPointer`). Anything else makes CPMM refuse to create the pool. | V4 |
+| A11 | Which Pyth crate reads the price account? | **Not `pyth-sdk-solana` — it cannot compile.** It needs borsh 0.10 while Anchor's Solana cohort needs borsh 1.x, and no pin resolves it. `oracle/pyth.rs` reads the POD layout locally. | V7 |
 
 ## Newly raised, needing a decision before T4
 

@@ -278,6 +278,25 @@ Two caveats that shape the code:
 - Crate: **`pyth-sdk-solana` 0.10.6**. Account type
   `SolanaPriceAccount = GenericPriceAccount<32, ()>` (`src/state.rs:425`), a flat POD struct read
   with `SolanaPriceAccount::account_info_to_feed` / `load_price_account`.
+- **PLAN AMENDMENT A11 — the SDK cannot be compiled into this program at all.**
+  `pyth-sdk-solana` 0.10.6 depends on `borsh = "0.10.4"` and `solana-program = ">= 1.10"`.
+  Every `solana-address` 2.x release (which `solana-program` 3.x pulls in) depends on
+  `borsh = "^1.5.5"` and implements only borsh 1.x. The two majors cannot be unified, so the
+  SDK's own `BorshDeserialize` derive on `Address` fields fails to compile:
+
+  ```
+  error[E0277]: the trait bound `Address: borsh::BorshDeserialize` is not satisfied
+    --> pyth-sdk-solana-0.10.6/src/error.rs:2:5
+  ```
+
+  Pinning `solana-program` to Anchor's cohort does not help: the conflict is in `borsh`, not
+  `solana-program`. 0.10.6 is the newest release and there is no fix upstream.
+  **Resolution:** `oracle/pyth.rs` defines the price-account layout locally, transcribed
+  field-for-field from `pyth-sdk-solana` 0.10.6 `src/state.rs`, and reads it with `bytemuck`.
+  The layout is a flat POD struct — no borsh anywhere on the read path — so nothing is lost, and
+  the program no longer depends on a crate carrying borsh 0.10. The transcription carries the
+  upstream line numbers in comments so it can be re-checked on upgrade.
+
 - Layout (`src/state.rs:292+`): `magic, ver, atype, size, ptype, expo: i32, num, num_qt,
   last_slot, valid_slot, agg: PriceInfo, ema_price, ema_conf, timestamp: i64, min_pub, drv2..drv4,
   prod, next, prev_slot, prev_price, prev_conf, prev_timestamp, agg_pub_slot`.
@@ -397,6 +416,7 @@ V4's allow-list forbids `TransferHook` on our mint entirely. PLAN.md §5's relia
 | A8 | Pyth staleness is in **slots**; SDK's `VALID_SLOT_PERIOD = 25` is devnet-sized (V7). | `config.oracle_max_age_slots`, `oracle/pyth.rs` |
 | A9 | Pyth confidence is **not** validated by the SDK and `price` is signed (V7). | `oracle/pyth.rs` |
 | A10 | Mint must carry **only** `TransferFeeConfig` (+ optionally `MetadataPointer`) or CPMM refuses the pool (V4). | `initialize`, `docs/THREATS.md` |
+| A11 | `pyth-sdk-solana` is uncompilable alongside `anchor-lang` 1.1.2 (borsh 0.10 vs 1.x). | `oracle/pyth.rs` reads the layout locally, transcribed with upstream line refs |
 
 None of these contradict a *decision* in §1. None changed D1–D14. Nothing here requires a human
 answer to Q1–Q6, which remain open in `QUESTIONS.md` with their stated defaults in force.
