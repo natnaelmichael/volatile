@@ -17,6 +17,8 @@ bytemuck = { version = "=1.24.0", features = ["derive"] }
 
 # Dev-only.
 proptest = "=1.9.0"
+# For tests/idl_is_stable.rs, which pins the generated IDL to errors.rs.
+serde_json = "=1.0.151"
 
 # PLAN.md §0.4: overflow checks must be ON in release. A Solana program that
 # wraps silently on a fee calculation is a protocol drain.

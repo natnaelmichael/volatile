@@ -14,7 +14,7 @@ use anchor_lang::prelude::*;
 /// positionally from 6000, so adding a variant anywhere but the end renumbers
 /// everything after it. `tests/idl_is_stable.rs` fails if this drifts from the
 /// generated IDL.
-pub const NUM_ERRORS: u8 = 61;
+pub const NUM_ERRORS: u8 = 60;
 
 #[error_code]
 pub enum ElasticTreasuryError {
@@ -144,15 +144,16 @@ pub enum ElasticTreasuryError {
     SafetyLimitExceeded,
     /// An `ActiveAction` already exists and is not re-raisable.
     ActionAlreadyActive,
-    /// `revert_action` before the minimum hold time, or while volatility is
-    /// still above `volatility_max_bps`.
-    RevertNotAllowed,
 
     // -- harvest (60) ------------------------------------------------------
     /// There is nothing withheld to harvest.
     NothingToHarvest,
 
-    // -- appended after the 59-error freeze (60) ---------------------------
+    // -- appended after T2 (60) --------------------------------------------
+    // These two were added at the very end after T2 so earlier codes did not
+    // shift; they were the 60th and 61st variants. `revert_action` was later
+    // removed (PLAN.md v3 D16), which dropped `RevertNotAllowed` and the count
+    // back to 60. The set is frozen at T3 and verified against the IDL.
     /// The CPMM swap would have delivered less net than `min_out` requires.
     /// PLAN.md §6.1 / I7: never accept less than the keeper asked for.
     SlippageExceeded,

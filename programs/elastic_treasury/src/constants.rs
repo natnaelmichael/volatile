@@ -144,8 +144,8 @@ pub const MIN_SWAP_QUOTE_AMOUNT: u64 = 1;
 /// A native `SetTransferFee` always activates at `current_epoch + 2`. Not a
 /// knob: it is a property of `process_set_transfer_fee`
 /// (`token-2022/program/src/extension/transfer_fee/processor.rs:106`).
-/// Applies to decreases too, which is why `revert_action` is not faster than
-/// `poll_and_act` (docs/VERIFIED.md A1).
+/// Applies to decreases too, which is why the weekly down-ramp (D16) is not
+/// faster than the fast layer's raises (docs/VERIFIED.md A1).
 pub const FEE_CHANGE_DELAY_EPOCHS: u64 = 2;
 
 /// Mainnet `slots_per_epoch`, read live from `getEpochSchedule`. Documented as

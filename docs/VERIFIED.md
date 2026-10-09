@@ -455,13 +455,16 @@ price' = x'/y' = (x+dx)/x * (x+dx)/x   =>   relative move = (1+f)^2 - 1 = 2f + f
 At `f = 1%` that is `2 + 0.01 = 2.01%` = **201 bps for every CPMM pool**, and selling instead of
 buying gives the same magnitude with the opposite sign. Consequences worth recording:
 
-* `math::amm::ELASTICITY_BPS_PER_ONE_PERCENT` is a constant. There is no reserve input to get wrong
-  and no way for a pool operator to make the program's elasticity look better by choosing a ratio.
-* It must still be *derived and asserted* rather than assumed, so
-  `elasticity_is_reserve_independent` simulates swaps at five reserve ratios (1:1, 100:1, 1:100,
-  arbitrary, and a size large enough to avoid truncation) and checks the realised move against the
-  closed form. The realised integer move is 200–201 bps: the pool floors `dy`, which can only lose,
-  so the closed form is an upper bound.
+* Because it is constant, it carries **no per-pool information** and does not enter the fee
+  deterrent (§6.2 uses `P0/Pf` directly). The program does **not** store it in `Config` and does
+  **not** expose a function for it (PLAN.md v3 D17). The derivation is kept here for the keeper
+  project; there is no reserve input for the program to get wrong and no way for a pool operator to
+  make the program's elasticity look better by choosing a ratio.
+* The T2 unit test that derived it (`price_impact_is_two_f_plus_f_squared`, simulating swaps at
+  five reserve ratios) was removed with the code when the field was dropped. If the keeper project
+  reintroduces the quantity off-chain, it should re-derive `(1+f)²-1` rather than assume it. The
+  realised integer move is 200–201 bps: the pool floors `dy`, which can only lose, so the closed
+  form is an upper bound.
 
 ### TWAP is a difference of cumulative values, not a sum over intervals
 
@@ -477,7 +480,7 @@ linearise the ring into timestamp order (T8). `math::volatility::twap` returns t
 
 | # | Amendment | Where it lands |
 |---|---|---|
-| A1 | Fee *decreases* are also delayed 2 epochs (V1). | `docs/DESIGN.md`, README; `revert_action` has no faster path |
+| A1 | Fee *decreases* are also delayed 2 epochs (V1). | `docs/DESIGN.md`, README; since v3 there is no `revert_action`, so the only down-ramp is the weekly `queue_scheduled_fee` (D16) |
 | A2 | A queued `SetTransferFee` is silently overwritten by the next call (V2). | `FeeQueueStatus` in `state/schedule.rs`, idempotent `queue_scheduled_fee` |
 | A3 | `minimum_amount_out` is compared **net** of the output transfer fee, so pass the desired **net** receipt with **no** gross-up (V4, re-confirmed against `instructions_swap_base_input.rs:147-153` in T2). | `math::amm::min_out_from_net` + `assert_min_out_satisfied` + unit tests |
 | A4 | `SwapBaseInput` feeds the curve `amount_in` **net** of the input transfer fee (V4). | `math::amm` sizing, `venue/raydium_cpmm.rs` |
@@ -489,5 +492,7 @@ linearise the ring into timestamp order (T8). `math::volatility::twap` returns t
 | A10 | Mint must carry **only** `TransferFeeConfig` (+ optionally `MetadataPointer`) or CPMM refuses the pool (V4). | `initialize`, `docs/THREATS.md` |
 | A11 | `pyth-sdk-solana` is uncompilable alongside `anchor-lang` 1.1.2 (borsh 0.10 vs 1.x). | `oracle/pyth.rs` reads the layout locally, transcribed with upstream line refs |
 
-None of these contradict a *decision* in §1. None changed D1–D14. Nothing here requires a human
-answer to Q1–Q6, which remain open in `QUESTIONS.md` with their stated defaults in force.
+None of these contradict a *decision* in §1. None changed D1–D14; D15–D17 were added in v3 (keeper
+trust, removal of `revert_action`, removal of `elasticity`). Nothing here requires a human answer to
+Q1–Q6, which remain open in `QUESTIONS.md` with their stated defaults in force; B7–B11 record the v3
+operator decisions on the keeper and the fast layer.

@@ -1,8 +1,10 @@
-# PLAN.md: Elastic Treasury Token Program (Anchor / Rust, Token-2022)  [v2]
+# PLAN.md: Elastic Treasury Token Program (Anchor / Rust, Token-2022)  [v3]
 
 Scope: **on-chain program only.** The off-chain keeper/AI agent is a separate project; this plan only defines the interface it will use (Section 9).
 
 **Changes in v2:** weekly published parameter schedule (Mondays 00:01 UTC); formula v1 = original equation as written; treasury stimulus removed; fee cap 50%; activation in USD (Pyth) and latched; short hop count k=4 fixed from the lender/short-seller model.
+
+**Changes in v3:** `revert_action` removed — the fast layer can only ever raise the fee, and the fee returns to `base_fee_bps` only when the weekly `queue_scheduled_fee` crank overwrites it (D16); `elasticity` removed from `Config` — T2 proved it is a constant for a constant-product pool, so it carries no per-pool information and the program does not reference it (D17); keeper trust model written down as **untrusted and locally hosted**, with no program-side rotation or kill switch (D15); task list renumbered after the removal of the revert task.
 
 ---
 
@@ -26,7 +28,7 @@ Scope: **on-chain program only.** The off-chain keeper/AI agent is a separate pr
 | D2 | Token standard = **Token-2022 with TransferFeeConfig**. | Final |
 | D3 | Fee changes use native `SetTransferFee` via CPI, signed by a program PDA that is the `transfer_fee_config_authority`. Fee changes are **queued and take effect at an epoch boundary**, never at an exact wall-clock time. | Final (verify V1, V2, V8) |
 | D4 | `polling_rate_hours` default = 168 (one week), `u32 >= 1`, fixed at `initialize`. It is the volatility lookback window. | Final |
-| D5 | v1 DEX = **Raydium CPMM** behind a `Venue` adapter; more pools later (T13). | Final |
+| D5 | v1 DEX = **Raydium CPMM** behind a `Venue` adapter; more pools later (T12). | Final |
 | D6 | Order-book analysis lives in the keeper. The program reads only on-chain pool state. | Final |
 | D7 | Strict validation at `initialize` and on every schedule publish. Compile-time checks apply to constants only. | Final |
 | D8 | **Weekly schedule:** parameters and the formula version change only on Mondays 00:01 UTC, and each week's entry must be published on-chain at least 7 days ahead. | Final |
@@ -36,6 +38,9 @@ Scope: **on-chain program only.** The off-chain keeper/AI agent is a separate pr
 | D12 | Activation thresholds are **USD equivalents**, read via a Pyth price feed. Once activated, the program **stays activated** even if the metric later falls below the threshold. | Final (verify V7) |
 | D13 | Short hop count `k = 4` (LP loans tokens to short seller, short seller sells, re-buys, returns tokens to LP). Stored as a constant `SHORT_HOPS = 4`. | Final for v1 |
 | D14 | Timezone for the schedule = **UTC** (no DST shifts). | Assumed (Q2) |
+| D15 | The `keeper` key is **untrusted by the program** and **hosted locally on the same machine as `solana-keygen`**, secured by the operator with OS permissions and a firewall. The program side is unchanged by this: the keeper stays a single `Pubkey` in `Config` and `poll_and_act` recomputes everything. A compromised keeper can raise the fee to the published ceiling and spend at most `safety_limit_bps` of the quote vault per action; it cannot publish, cancel, move funds, or change the authorities. | Final |
+| D16 | **`revert_action` is removed.** The fast layer may only raise the fee (RaiseFee) or buy (BuyDefend). A raised fee returns to the active week's `base_fee_bps` only when the weekly `queue_scheduled_fee` crank overwrites it (which §5.3 already gives precedence). The keeper project is responsible for proposing weekly params; the program does not try to time a down-ramp. | Final |
+| D17 | **`elasticity` is not stored or referenced by the program.** T2 proved §6.4's quantity is the constant `(1+0.01)² - 1 = 201` bps per 1% of input reserve for any constant-product pool, independent of reserves, so a per-pool stored value would be information-free and misleading. See §6.4. | Final |
 
 ---
 
@@ -67,7 +72,7 @@ programs/elastic_treasury/src/
     initialize.rs  activate.rs
     publish_weekly_params.rs  cancel_weekly_params.rs
     queue_scheduled_fee.rs  harvest_fees.rs
-    poll_and_act.rs  revert_action.rs
+    poll_and_act.rs
   venue/      mod.rs (trait Venue)  raydium_cpmm.rs
   oracle/     pyth.rs
   math/       mod.rs amm.rs fee_deterrent.rs volatility.rs fixed.rs
@@ -83,7 +88,10 @@ QUESTIONS.md
 **Trust model**
 - `developer` can only publish/cancel future weekly entries. It cannot touch the current week.
 - `keeper` is the only signer for `poll_and_act`; it can only pick actions the program validates.
+- The `keeper` key is **untrusted** (D15): it is a plain `Pubkey` in `Config`, hosted locally alongside `solana-keygen` and secured by the operator. The program recomputes every number, so a stolen keeper key can do no more than raise the fee to the published ceiling and spend up to `safety_limit_bps` of the quote vault. There is deliberately no program-side keeper rotation or kill switch — the off-chain operator owns that problem, and adding them would expand the authority surface for no on-chain benefit.
 - Fee-config authority, withdraw-withheld authority and treasury token accounts are **PDAs** owned by this program.
+
+**No mid-week down-ramp (D16):** the fast layer can only raise the fee or buy. A raised fee falls back to the week's `base_fee_bps` at the next weekly `queue_scheduled_fee`, so the reset is a weekly event chosen by the operator's published params, not an on-chain reaction. Operators who want a quicker reset must publish a lower `base_fee_bps` for the following week.
 
 ---
 
@@ -95,8 +103,9 @@ QUESTIONS.md
 - `activation: { kind: enum { Liquidity, MarketCap }, value_usd: u64 }`  (exactly one kind)
 - `activated: bool` (latched, never reset to false)
 - `mint`, `pool`, `quote_mint`, `quote_usd_feed: Pubkey`, bumps
+- `oracle_max_age_slots: u64`, `oracle_max_conf_bps: u32` (B1: promised by V7/A7–A9)
 - `formula_version: u8` (current active version, copied from the active week)
-- Program-set: `elasticity_scaled: u64`, `last_window_volatility_bps: u32`, `high_water_mark: u64` (see Q4)
+- Program-set: `last_window_volatility_bps: u32`, `high_water_mark: u64` (see Q4)
 
 ### 4.2 `WeeklyParams` (entries stored in `Schedule`, PDA `["schedule", mint]`, fixed array of 4 slots)
 Each entry: `week_effective_ts: i64` (a Monday 00:01 UTC), `published_ts: i64`, and
@@ -115,7 +124,9 @@ Plus `current_index` and the `FeeQueueStatus` (see 5.3).
 `window_start_ts`, `window_start_price`, `window_high`, `window_low`, `last_check_ts`, `last_check_epoch`, ring buffer of the last N <= 16 TWAP samples.
 
 ### 4.5 `ActiveAction` (PDA `["action", mint]`)
-`kind: enum { RaiseFee, BuyDefend }`, `started_ts`, `started_epoch`, `fee_before_bps`, `fee_after_bps`, `effective_epoch` (= start + 2), `quote_used`, `observed_effective_ts` (filled once seen).
+`kind: enum { RaiseFee, BuyDefend }`, `started_ts`, `started_epoch`, `fee_before_bps`, `fee_after_bps`, `effective_epoch` (= start + 2), `quote_used`, `observed_effective_ts` (filled once seen), `active: bool`.
+
+With `revert_action` removed (D16), an action is cleared by the weekly `queue_scheduled_fee`: when it queues the active week's `base_fee_bps` as a `ScheduledBase` change, it sets `active = false` and resets the fee fields. A later intra-week RaiseFee may overwrite an `active` RaiseFee (raising further within the cap); a BuyDefend cannot overwrite an active RaiseFee.
 
 ---
 
@@ -132,7 +143,6 @@ Plus `current_index` and the `FeeQueueStatus` (see 5.3).
 | `queue_scheduled_fee` | anyone (crank) | CPI `SetTransferFee` for the next week's `base_fee_bps`, called in the epoch chosen by 5.3 so the change lands closest to Monday 00:01 UTC. |
 | `harvest_fees` | anyone | CPI harvest to mint, then withdraw to `token_vault`. |
 | `poll_and_act` | keeper | Core logic, 5.2. |
-| `revert_action` | keeper/anyone | Restore base fee, 5.4. |
 
 ### 5.2 `poll_and_act`
 1. Require `activated`; signer == `keeper`; resolve the active `WeeklyParams` from the clock (the entry with the latest `week_effective_ts <= now`).
@@ -143,7 +153,7 @@ Plus `current_index` and the `FeeQueueStatus` (see 5.3).
    - `vol > volatility_max` and price rising: **RaiseFee** to the required fee from Section 6.2, clamped to `[current_fee, min(week.max_fee_bps, 5000)]`.
    - `vol > volatility_max` and price falling: **BuyDefend**: buy the token with treasury quote, sized with 6.1 to bring the move back within `volatility_max`.
 5. **Fund safety check:** `quote_used * 10_000 <= safety_limit_bps * quote_vault_balance`; otherwise cancel (see Q3). Enforce `MAX_SLIPPAGE_BPS` on every swap.
-6. At most one unreverted `ActiveAction` at a time (a RaiseFee may be raised further within the cap).
+6. At most one active `ActiveAction` at a time. An existing active RaiseFee may be raised further within the cap; a BuyDefend may not coexist with an active RaiseFee. There is no revert path (D16): the action clears when the weekly `queue_scheduled_fee` overwrites the fee.
 7. Emit `ActionTaken` (all inputs/outputs) for off-chain audit.
 
 ### 5.3 Fee scheduling vs the epoch delay
@@ -151,9 +161,10 @@ Plus `current_index` and the `FeeQueueStatus` (see 5.3).
 - `queue_scheduled_fee` picks the call epoch `E` such that the estimated start time of epoch `E+2` is closest to the target Monday (use V8; `EST_SLOT_MS` constant; record error in `observed_effective_ts` once the new fee is read back from the mint).
 - Only one pending change exists at a time (V2). If an intra-week RaiseFee is pending when a scheduled change is due, the scheduled base fee takes precedence and overwrites it.
 - Because the fee lags by two epochs, treat the fee path as **trend control**, not real-time control.
+- **The scheduled base fee is the only down-ramp (D16).** A RaiseFee never schedules its own reversal; the next weekly `queue_scheduled_fee` writes the new week's `base_fee_bps` over it. If an operator wants a raised fee to fall sooner, the only lever is a lower `base_fee_bps` in the following week's published entry.
 
-### 5.4 Reverting actions
-A RaiseFee ends when BOTH hold: (a) the next weekly boundary has passed or one full `polling_rate_hours` window has elapsed since it started, whichever is later, and (b) the latest check shows `vol <= volatility_max`. Revert queues the active week's `base_fee_bps` (also subject to the 2-epoch delay unless V1 shows decreases are immediate).
+### 5.4 (removed)
+`revert_action` was removed in v3 (D16). The plan previously described it in this slot. The fee can only be raised by the fast layer and is reset by the weekly `queue_scheduled_fee`.
 
 ### 5.5 Invariants (all unit-tested)
 - I1: All schedule/init values valid; invalid input reverts with zero state change.
@@ -201,8 +212,8 @@ Documented properties of v1 (add as tests so they are visible, not hidden):
 - Range: `vol_bps = (window_high - window_low) * 10_000 / window_start_price`; direction from the sign of `(price_now - window_start_price)`.
 - Samples come from the CPMM observation account (TWAP), never from the keeper. Lookback = `polling_rate_hours`.
 
-### 6.4 Elasticity (program-set)
-`elasticity` = bps price move per 1% of quote reserve traded; derived from reserves via 6.1; stored for the keeper's use.
+### 6.4 Elasticity (resolved: not used)
+For a constant-product pool, trading 1% of the quote reserve moves the price by `(1/0.99) - 1 = 1.0101...%`, i.e. ~201 bps, and this is **independent of the reserves** (T2 verified it against simulated swaps at five reserve ratios). `elasticity` therefore adds no per-pool information, and it does not enter the fee deterrent (6.2 uses `P0/Pf` directly). It is neither stored in `Config` nor exposed by the program (D17). The derivation is retained in `docs/VERIFIED.md` for the keeper project, which may use it to size an expected price impact off-chain.
 
 ### 6.5 Activation metrics (USD)
 - `liquidity_usd` = quote-side reserve value in USD (quote reserve * Pyth quote/USD price). Q5 asks whether this should be both sides instead.
@@ -233,13 +244,11 @@ Documented properties of v1 (add as tests so they are visible, not hidden):
 
 **T9: `poll_and_act`.** Section 5.2 using T2, T8. *Accept:* I2, I5-I8; scenario tests for no-action, high-vol rise to fee, high-vol fall to buy, safety cancel, cooldown rejection. No code path spends treasury funds when `vol < volatility_min`.
 
-**T10: `revert_action`.** Section 5.4. *Accept:* cannot revert early or while volatility is still above max.
+**T10: Adversarial tests.** Flash manipulation before a check, forged accounts, sandwiching the treasury swap, rapid repeated calls, stale oracle, schedule publish at the last second, zero-liquidity pool, wrong pool/mint. *Accept:* each attack reverts or costs <= `safety_limit_bps` of treasury; findings in `docs/THREATS.md`.
 
-**T11: Adversarial tests.** Flash manipulation before a check, forged accounts, sandwiching the treasury swap, rapid repeated calls, stale oracle, schedule publish at the last second, zero-liquidity pool, wrong pool/mint. *Accept:* each attack reverts or costs <= `safety_limit_bps` of treasury; findings in `docs/THREATS.md`.
+**T11: Devnet deploy and docs.** Scripted multi-week scenario (local validator with short epochs first). README must plainly state: parameters change only Mondays 00:01 UTC, published 7+ days ahead; the fee lands at the nearest epoch boundary, not the exact minute; the 50% fee cap; the formula-v1 limitations; and that the fee only falls again at a weekly `queue_scheduled_fee` (v3, D16). *Accept:* README reviewed against Sections 5-6.
 
-**T12: Devnet deploy and docs.** Scripted multi-week scenario (local validator with short epochs first). README must plainly state: parameters change only Mondays 00:01 UTC, published 7+ days ahead; the fee lands at the nearest epoch boundary, not the exact minute; the 50% fee cap; the formula-v1 limitations. *Accept:* README reviewed against Sections 5-6.
-
-**T13 (later): Multi-venue.** Second `Venue` (Orca/Meteora), allow-listed pool registry, median price / summed depth. *Accept:* aggregation survives one manipulated or paused pool.
+**T12 (later): Multi-venue.** Second `Venue` (Orca/Meteora), allow-listed pool registry, median price / summed depth. *Accept:* aggregation survives one manipulated or paused pool.
 
 **Future (not in this plan):** treasury stimulus when `vol < volatility_min` (needs a decision and legal review); formula v2 (candidate: closed form `fee = 1 - (Pf/P0)^(1/k)`); minute-level fee control (impossible with native TransferFeeConfig).
 
@@ -252,8 +261,8 @@ Unit and property tests for `math/`; LiteSVM/Bankrun with clock and epoch warpin
 
 ## 9. Keeper interface (for the later agent project)
 - Read: `Config`, `Schedule`, `PollState`, `ActiveAction`, `TreasuryState`, `ActionTaken` events.
-- Write: `poll_and_act(hint)` where the hint (action kind, size, fee) is only a suggestion; the program recomputes and bounds-checks everything. The keeper also calls `harvest_fees`, `queue_scheduled_fee`, `revert_action`.
-- Keeper owns: order-book analysis, short-horizon prediction, call timing.
+- Write: `poll_and_act(hint)` where the hint (action kind, size, fee) is only a suggestion; the program recomputes and bounds-checks everything. The keeper also calls `harvest_fees` and `queue_scheduled_fee`.
+- Keeper owns: order-book analysis, short-horizon prediction, call timing, and the weekly parameter proposal that will become next week's `base_fee_bps` / ceiling. That proposal is an off-chain artifact the `developer` publishes; it is not a program instruction (D16).
 
 ---
 

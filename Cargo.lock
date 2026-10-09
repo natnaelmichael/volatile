@@ -1223,6 +1223,7 @@ dependencies = [
  "bytemuck",
  "litesvm",
  "proptest",
+ "serde_json",
  "solana-keypair",
  "solana-message",
  "solana-signer",

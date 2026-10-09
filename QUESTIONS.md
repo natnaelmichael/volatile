@@ -7,7 +7,7 @@ Open items from PLAN.md §10 plus the questions raised by the T0 verification pa
 
 | # | Question | Default in force | Raised | Answered |
 |---|---|---|---|---|
-| Q1 | With a weekly lookback, are `poll_and_act` checks allowed every `ACTION_COOLDOWN_SECS` (24 h) on a rolling window, or only once per `polling_rate_hours`? | Every 24 h on a rolling window | T9 | |
+| Q1 | With a weekly lookback, are `poll_and_act` checks allowed every `ACTION_COOLDOWN_SECS` (24 h) on a rolling window, or only once per `polling_rate_hours`? | Every 24 h on a rolling window | T9 | Confirmed; lookback default stays 168 h |
 | Q2 | Schedule timezone. | **UTC**, no DST (D14) | T1 | |
 | Q3 | When the fund safety limit blocks a BuyDefend: revert the tx, or succeed as a logged no-op? | **Revert** the tx (T9) | T9 | |
 | Q4 | What does `high_water_mark` gate? | Tracked and reported only, gates nothing (T3) | T3 | |
@@ -35,11 +35,16 @@ contradict or complete the plan text. They are listed so the reasoning stays vis
 
 ## Newly raised, needing a decision before T4
 
-| # | Question | Interim handling |
+| # | Question | Resolution |
 |---|---|---|
-| B1 | PLAN §4.1 does not list `oracle_max_age_slots` / `max_conf_bps` in `Config`, but A8/A9 require them as tunable values. | Add both to `Config`, defaulted in `initialize` (T4). Flagged for a §4.1 amendment. |
-| B2 | PLAN §4.2 mentions `FeeQueueStatus` but never defines it. | Define in `state/schedule.rs` as: `pending_fee_bps`, `pending_fee_epoch`, `pending_fee_source { ScheduledBase, IntraWeekRaise, Revert }`, `last_queued_epoch`. Needed for A2. |
+| B1 | PLAN §4.1 does not list `oracle_max_age_slots` / `max_conf_bps` in `Config`, but A8/A9 require them as tunable values. | **Confirmed v3:** add both to `Config`, defaulted in `initialize` (T4). §4.1 amended. |
+| B2 | PLAN §4.2 mentions `FeeQueueStatus` but never defines it. | Define in `state/schedule.rs` as: `pending_fee_bps`, `pending_fee_epoch`, `pending_fee_source { ScheduledBase, IntraWeekRaise }`, `last_queued_epoch`. Needed for A2. **v3:** the `Revert` source is gone with `revert_action`. |
 | B3 | PLAN §5.1 `harvest_fees` says "harvest to mint, then withdraw to `token_vault`" but does not say who pays the rent/top-up if `token_vault` does not exist. | `token_vault` is created by the program at `initialize` and funded by the developer in the same tx. |
 | B4 | PLAN §3 says fee-config / withdraw-withheld authorities are PDAs. §4.1 does not store their bumps. | Store `fee_authority_bump` and `withdraw_authority_bump` in `Config`. |
 | B5 | Should `publish_weekly_params` be able to modify an entry that is published but not yet effective? | **No** — I4 makes the entry immutable once published; use `cancel` then re-publish. Keeps "what the market saw" auditable. |
 | B6 | `poll_and_act` hint (§9) — is it even accepted? | Accepted and logged, then **entirely ignored** by the decision logic. Present so the keeper's tx shape is stable, per §0.7. |
+| B7 | How is the keeper key trusted and hosted? | **Untrusted by the program, locally hosted** on the same machine as `solana-keygen`, secured by the operator with OS permissions and a firewall (D15). The program keeps the keeper as a single `Pubkey` and recomputes every number. No program-side custody work. |
+| B8 | Should the program expose `set_keeper` / a kill switch? | **No.** Not required for the program side to function; it would expand the authority surface for no on-chain benefit (D15). The operator owns key hygiene and recovery. |
+| B9 | Is `elasticity` stored in `Config`? | **No.** T2 proved it is the reserve-independent constant `(1+0.01)²-1 = 201` bps per 1% of input reserve, so it carries no per-pool information and does not enter the fee formula. Removed from `Config`; §6.4 marked resolved; the program does not reference it (D17). |
+| B10 | Does `revert_action` exist? | **No** (D16). The fast layer only raises the fee or buys; the fee returns to the week's `base_fee_bps` when the weekly `queue_scheduled_fee` overwrites it. §5.4, the instruction, `FeeQueueSource::Revert`, and error `RevertNotAllowed` are all removed. |
+| B11 | Should the program offer a "propose weekly params" instruction for the agent? | **No.** Weekly parameter selection lives entirely in the keeper project; the program only accepts a validated `publish_weekly_params` from the `developer`. `polling_rate_hours` stays at its 168 h default (D4). |

@@ -35,7 +35,7 @@
 //! reverts as a named error rather than being silently zero.
 
 use crate::errors::MathError;
-use crate::math::fixed::{self, SCALE};
+use crate::math::fixed::SCALE;
 
 /// CPMM fee denominator. Not 10_000: the pool stores rates out of 1e6.
 pub const FEE_DENOMINATOR: u64 = 1_000_000;
@@ -178,7 +178,7 @@ pub fn calculate_pre_fee_amount(
 ///
 /// Transcribed from `PoolState::vault_amount_without_fee`. Reserves that have not
 /// had their accrued fees removed would let a swap price against liquidity that
-/// is already spoken for, and would misprice `elasticity` (§6.4).
+/// is already spoken for (docs/VERIFIED.md A5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AccruedFees {
     pub protocol_fees_token_0: u64,
@@ -445,48 +445,11 @@ pub fn assert_min_out_satisfied(
     Ok(())
 }
 
-/// bps of price move caused by trading 1% of the input reserve (PLAN.md §6.4).
-///
-/// `elasticity` in the plan. For a constant-product curve the answer turns out
-/// to be a **constant**, independent of the reserve ratio, which is worth knowing
-/// because it means this number can never be gamed by choosing a pool:
-///
-/// ```text
-/// dy = dx*y/(x+dx)                      so y' = y*x/(x+dx)
-/// token price (quote per token) = x/y so price' = x'/y' = (x+dx)/x * (x+dx)/x
-/// relative move = (1+f)^2 - 1 = 2f + f^2,  f = dx/x
-/// ```
-///
-/// At `f = 1%` that is `2 + 0.01 = 2.01%`, i.e. **201 bps**, for every CPMM
-/// pool. Selling the token instead of buying it gives the same magnitude with the
-/// opposite sign. `docs/VERIFIED.md` records this; `elasticity_is_reserve_independent`
-/// checks the closed form against real simulated swaps at four reserve ratios.
-pub const ELASTICITY_BPS_PER_ONE_PERCENT: u32 = 201;
-
-/// Price move, in bps, from trading `input_reserve_fraction_bps` of the input
-/// reserve: `2f + f^2` in bps, rounded up.
-pub fn price_impact_bps(input_reserve_fraction_bps: u32) -> Result<u32, MathError> {
-    let bps = input_reserve_fraction_bps as u128;
-    // A trade of the whole reserve would be f = 1; refuse rather than report a
-    // meaningless number for an input no pool would accept.
-    if bps >= 10_000 {
-        return Err(MathError::Unrepresentable);
-    }
-    let linear = bps.checked_mul(2).ok_or(MathError::Overflow)?;
-    let quadratic = fixed::ceil_div(
-        bps.checked_mul(bps).ok_or(MathError::Overflow)?,
-        10_000,
-    )
-    .ok_or(MathError::DivideByZero)?;
-    u32::try_from(linear.checked_add(quadratic).ok_or(MathError::Overflow)?)
-        .map_err(|_| MathError::Unrepresentable)
-}
-
-/// §6.4's stored `elasticity`. A constant, per the derivation above; the
-/// signature stays reserve-free so a reader does not assume otherwise.
-pub fn elasticity() -> u32 {
-    ELASTICITY_BPS_PER_ONE_PERCENT
-}
+// PLAN.md §6.4 ("elasticity") is deliberately absent from this module. T2 showed
+// the quantity is the reserve-independent constant `(1+f)^2 - 1 = 201` bps per 1%
+// of input reserve for every constant-product pool, so it carries no per-pool
+// information and the program does not store or reference it (PLAN.md v3 D17).
+// The derivation is recorded in `docs/VERIFIED.md`.
 
 /// Q32.32 observation price to 1e9 fixed point, for the volatility module.
 ///
@@ -819,53 +782,16 @@ mod tests {
         }
     }
 
-    /// §6.4's elasticity is a constant for a constant-product pool. Rather than
-    /// assert the formula against itself, drive it from real swaps at four very
-    /// different reserve ratios.
+    /// §6.4's elasticity is deliberately not implemented (PLAN.md v3 D17): it is a
+    /// reserve-independent constant, so it carries no per-pool information. The
+    /// tests that previously derived it here were removed with the code; the
+    /// derivation lives in `docs/VERIFIED.md`.
     #[test]
-    fn elasticity_is_reserve_independent() {
-        let closed_form = price_impact_bps(100).unwrap();
-        assert_eq!(closed_form, 201);
-        assert_eq!(elasticity(), ELASTICITY_BPS_PER_ONE_PERCENT);
-
-        for &(x, y) in &[
-            (1_000_000u128, 1_000_000u128),   // 1:1
-            (100_000_000, 1_000_000),        // 100:1
-            (1_000_000, 100_000_000),        // 1:100
-            (12_345_678, 98_765_432),        // arbitrary
-            (10_000_000_000_000u128, 10_000_000_000_000), // large enough not to truncate
-        ] {
-            let dx = x / 100;
-            let dy = swap_base_input_without_fees(dx, x, y).unwrap();
-
-            // Price of the token in quote, before and after, as an exact rational
-            // difference so no intermediate rounding can hide the answer:
-            //   move = (x+dx)/(y-dy) / (x/y) - 1
-            //        = ((x+dx)*y - x*(y-dy)) / (x*(y-dy))
-            let numerator = (x + dx) * y - x * (y - dy);
-            let denominator = x * (y - dy);
-            let move_bps = (numerator * 10_000 / denominator) as u32;
-
-            // The realised move never exceeds the closed form (the pool floors
-            // `dy`, which can only lose), and is within one bps of it.
-            assert!(
-                (200..=201).contains(&move_bps),
-                "x={x} y={y}: realised {move_bps} bps, closed form {closed_form}"
-            );
-        }
-    }
-
-    /// `2f + f^2`, rounded up, and the edges of the domain.
-    #[test]
-    fn price_impact_is_two_f_plus_f_squared() {
-        assert_eq!(price_impact_bps(0).unwrap(), 0);
-        assert_eq!(price_impact_bps(50).unwrap(), 101); // 1% + 0.25%
-        assert_eq!(price_impact_bps(100).unwrap(), 201); // 2% + 1%
-        assert_eq!(price_impact_bps(200).unwrap(), 404); // 4% + 4%
-        assert_eq!(price_impact_bps(9_999).unwrap(), 19_998 + 9_999);
-        // Trading the entire reserve is not a price impact any pool expresses.
-        assert_eq!(price_impact_bps(10_000), Err(MathError::Unrepresentable));
-        assert_eq!(price_impact_bps(u32::MAX), Err(MathError::Unrepresentable));
+    fn elasticity_is_not_implemented() {
+        // This test exists so a future task cannot silently reintroduce the field
+        // without also revisiting the v3 decision. A compile failure says: "don't".
+        let _probe = SCALE;
+        assert_eq!(SCALE, 1_000_000_000);
     }
 
     #[test]
