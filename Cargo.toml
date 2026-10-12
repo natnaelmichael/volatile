@@ -1,5 +1,12 @@
 [workspace]
-members = ["programs/elastic_treasury"]
+members = [
+    "programs/elastic_treasury",
+    "programs/gatekeeper_hook",
+    "programs/custom_amm",
+]
+# Separate workspace: its LiteSVM/test-kit dependency tree is host-only and must
+# not constrain the on-chain programs' resolution.
+exclude = ["custom-amm-sdk"]
 resolver = "2"
 
 [workspace.package]
@@ -13,7 +20,13 @@ rust-version = "1.89.0"
 anchor-lang = "=1.1.2"
 anchor-spl = "=1.1.2"
 spl-token-2022-interface = "=2.0.0"
-bytemuck = { version = "=1.24.0", features = ["derive"] }
+# 1.25 is the floor required by spl-list-view (via spl-tlv-account-resolution).
+bytemuck = { version = "=1.25.2", features = ["derive"] }
+# Gatekeeper transfer hook. 2.1.0 is the first release on the solana-* 3.0
+# cohort that anchor-lang 1.1.2 pins (verified: it depends on solana-account-info
+# / solana-cpi / solana-instruction 3.0.0, spl-tlv-account-resolution 0.11.0).
+spl-transfer-hook-interface = "=2.1.0"
+spl-tlv-account-resolution = "=0.11.4"
 
 # Dev-only.
 proptest = "=1.9.0"

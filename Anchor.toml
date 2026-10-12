@@ -6,6 +6,8 @@ skip-lint = false
 
 [programs.localnet]
 elastic_treasury = "8UEBfsW4pD4VoGcyRiA2qnkuyh1s3DpwfzCphacXef6w"
+gatekeeper_hook = "9nwuM7iM2L4rqMFRXZosraLt8kYXoqKZaavPi8DvvgRU"
+custom_amm = "3UZvnosY9kcVrPWXdk4pbxJpezkgpNXkG6L7VugS7Vf7"
 
 [provider]
 cluster = "localnet"
